@@ -213,9 +213,8 @@ reports 24 medium and 14 low with **zero** high-confidence findings, which is
 the honest summary — that repo's "secrets" are password variables in
 deliberately vulnerable PHP sample code, not live credentials.
 
-<!-- SCREENSHOT (optional): close-up of the summary bar showing the
-     high/medium/low breakdown. -->
-![Confidence breakdown](docs/images/confidence-bar.png)
+
+![Confidence breakdown](docs/images/5.png)
 
 ---
 
@@ -277,8 +276,7 @@ cd frontend && npm install && npm run dev
 With `ALLOWED_ORIGINS` unset the API accepts any localhost port, so the
 frontend works regardless of which port `next dev` picks.
 
-<!-- SCREENSHOT (optional): the FastAPI /docs page with POST /scan expanded. -->
-![API docs](docs/images/api-docs.png)
+![API docs](docs/images/6.png)
 
 ---
 
