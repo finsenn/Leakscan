@@ -6,9 +6,9 @@ and always deletes the clone.
 """
 
 import json
+import logging
 import os
 import re
-from contextlib import asynccontextmanager
 import shutil
 import stat
 import subprocess
@@ -16,6 +16,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,8 +36,42 @@ GITHUB_URL_RE = re.compile(
     r"(?P<repo>[A-Za-z0-9._-]{1,100}?)(?:\.git)?/?$"
 )
 
+log = logging.getLogger("leakscan")
+
+# Any localhost port, so `next dev` works whichever port it lands on.
+LOCAL_DEV_ORIGIN_RE = r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
+
+
+def cors_options():
+    """Explicit origins in production, any localhost port in development.
+
+    ALLOWED_ORIGINS is a comma-separated list (set it to the Vercel domain).
+    Leaving it unset does NOT fall back to a wildcard - an unconfigured
+    deployment fails closed with a CORS error rather than silently serving
+    every origin on the internet.
+    """
+    configured = os.environ.get("ALLOWED_ORIGINS", "").strip()
+    if configured:
+        origins = [origin.strip() for origin in configured.split(",") if origin.strip()]
+        return {"allow_origins": origins}
+
+    return {"allow_origin_regex": LOCAL_DEV_ORIGIN_RE}
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    # Logged here rather than at import time: uvicorn installs its handlers
+    # during startup, so anything emitted earlier is discarded - and this line
+    # exists precisely to make the deployed CORS config visible in the logs.
+    allowed = os.environ.get("ALLOWED_ORIGINS", "").strip()
+    if allowed:
+        log.info("CORS restricted to: %s", allowed)
+    else:
+        log.warning(
+            "ALLOWED_ORIGINS unset - allowing localhost only. A deployed "
+            "frontend will be blocked until this is set."
+        )
+
     sweep_stale_clones()
     yield
 
@@ -45,9 +80,9 @@ app = FastAPI(title="Repo Secret Scanner", version="0.2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # demo app, no credentials; tighten to the Vercel domain later
     allow_methods=["POST", "GET"],
     allow_headers=["*"],
+    **cors_options(),
 )
 
 
@@ -107,14 +142,44 @@ def clone_repo(owner: str, repo: str, dest: str):
             capture_output=True, text=True, timeout=CLONE_TIMEOUT_S, env=env,
         )
     except subprocess.TimeoutExpired:
+        log.warning("git clone timed out after %ss: %s/%s", CLONE_TIMEOUT_S, owner, repo)
         raise HTTPException(status_code=504, detail="Cloning the repository timed out.")
+
     if result.returncode != 0:
-        # stderr may mention auth for private repos; don't echo it back verbatim
-        if "Authentication" in result.stderr or "could not read" in result.stderr:
+        # Log git's own explanation server-side. The client still gets a generic
+        # message - stderr can echo back a URL, and a credential-bearing URL must
+        # never reach an HTTP response - but without this, a failed scan is
+        # undiagnosable once the request is over.
+        log.warning(
+            "git clone failed for %s/%s (exit %s): %s",
+            owner, repo, result.returncode, result.stderr.strip()[:500],
+        )
+
+        # Map git's stderr onto a useful status. This matters when the GitHub
+        # pre-flight was skipped (API rate limit): without it, a private or
+        # missing repo surfaces as a confusing generic 502.
+        stderr = result.stderr.lower()
+
+        if any(
+            phrase in stderr
+            for phrase in ("repository not found", "authentication", "could not read",
+                           "not found", "access denied", "permission denied")
+        ):
             raise HTTPException(
                 status_code=404,
                 detail="Repository not found on GitHub - it may be private or the URL is wrong.",
             )
+
+        if any(
+            phrase in stderr
+            for phrase in ("could not resolve host", "unable to access",
+                           "connection timed out", "network is unreachable")
+        ):
+            raise HTTPException(
+                status_code=502,
+                detail="Could not reach GitHub to clone the repository. Try again shortly.",
+            )
+
         raise HTTPException(status_code=502, detail="Failed to clone the repository.")
 
 

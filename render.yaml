@@ -1,0 +1,30 @@
+# Render blueprint for the scanner backend.
+# Deploy: Render Dashboard -> New -> Blueprint -> point at this repo.
+#
+# The frontend is NOT here - it deploys to Vercel. See README.md for the
+# ordering, which matters: NEXT_PUBLIC_API_URL is baked in at build time, so
+# this service must exist before the frontend builds.
+services:
+  - type: web
+    name: leakscan-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    # Render supplies $PORT; binding to 0.0.0.0 is required for it to route traffic.
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    # Free instances sleep when idle. This endpoint is cheap and also serves as
+    # the wake-up ping.
+    healthCheckPath: /
+    envVars:
+      # Matches the local development version. Adjust if Render drops support
+      # for this patch release.
+      - key: PYTHON_VERSION
+        value: 3.13.2
+      # Comma-separated origins allowed to call the API - set this to the
+      # Vercel URL once the frontend is deployed, e.g.
+      #   https://leakscan.vercel.app
+      # Left unset, the API accepts localhost only and the deployed frontend
+      # will fail with a CORS error. That is deliberate: it fails closed.
+      - key: ALLOWED_ORIGINS
+        sync: false
