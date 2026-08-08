@@ -11,7 +11,7 @@ that separates a secret scanner that people use from one they mute.
 
 <!-- SCREENSHOT: main results view, light mode, showing findings + confidence bar.
      Suggested width ~1400px, crop to browser content (no OS chrome). -->
-![Leakscan scan results](docs/images/hero-light.png)
+![Leakscan scan results](docs/images/1.png)
 
 **Stack:** Python 3.13 · FastAPI · Next.js 16 (App Router) · React 19 ·
 TypeScript · Tailwind CSS 4 · pytest
@@ -44,24 +44,17 @@ low-confidence should *look* different at a glance from one with a real leak.
 
 <!-- SCREENSHOT: dark mode, results view. Same scroll position as the light shot
      above if possible — a matched pair reads well side by side. -->
-![Dark mode](docs/images/results-dark.png)
+![Dark mode](docs/images/2.png)
 
 <!-- SCREENSHOT: the hero + empty state before scanning (input box prominent). -->
-![Empty state](docs/images/empty-state.png)
+![Empty state](3.png)
 
 <!-- SCREENSHOT: the loading state mid-scan, with the staged progress list. -->
-![Scanning state](docs/images/scanning-state.png)
+![Scanning state](docs/images/4.png)
 
 Findings are grouped into two categories. **Exposed** covers everything in the
 cloned working tree; **In git history** covers secrets that were committed and
 later deleted, which remain recoverable from past commits.
-
-> There is deliberately no "protected by .gitignore" category in the web app.
-> A clone contains only *tracked* files, and adding a path to `.gitignore` never
-> untracks a file that was already committed — so anything the scan finds in a
-> public clone is public, full stop. The engine still computes the distinction,
-> because it is real when checking a local working copy before a push — the web
-> app simply does not surface something that cannot apply to a public repo.
 
 ---
 
