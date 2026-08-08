@@ -36,7 +36,11 @@ GITHUB_URL_RE = re.compile(
     r"(?P<repo>[A-Za-z0-9._-]{1,100}?)(?:\.git)?/?$"
 )
 
-log = logging.getLogger("leakscan")
+# Borrow uvicorn's logger rather than making our own: it already has handlers
+# and an INFO level attached, so these lines actually reach the platform log.
+# A bare logging.getLogger("leakscan") inherits the root logger, which has no
+# handler and defaults to WARNING - every info() call vanishes silently.
+log = logging.getLogger("uvicorn.error")
 
 # Any localhost port, so `next dev` works whichever port it lands on.
 LOCAL_DEV_ORIGIN_RE = r"https?://(localhost|127\.0\.0\.1)(:\d+)?"
