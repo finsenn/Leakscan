@@ -1,14 +1,21 @@
-export type FileFinding = {
-  file: string;
-  line: number;
+/** How much to trust a finding. See backend/patterns.py for the rules. */
+export type Confidence = "high" | "medium" | "low";
+
+type BaseFinding = {
   type: string;
   match: string;
+  confidence: Confidence;
+  /** Bits per character. Present only on entropy-pass findings. */
+  entropy?: number;
 };
 
-export type HistoryFinding = {
+export type FileFinding = BaseFinding & {
+  file: string;
+  line: number;
+};
+
+export type HistoryFinding = BaseFinding & {
   commit: string;
-  type: string;
-  match: string;
 };
 
 export type ScanResult = {
@@ -16,6 +23,7 @@ export type ScanResult = {
   exposed: FileFinding[];
   history: HistoryFinding[];
   counts: { exposed: number; history: number };
+  confidence_counts: Record<Confidence, number>;
   history_depth: number;
 };
 

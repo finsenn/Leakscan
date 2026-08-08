@@ -2,3 +2,6 @@ fastapi
 uvicorn[standard]
 pydantic
 pathspec
+
+# Tests: run with `python -m pytest` from the backend/ directory.
+pytest

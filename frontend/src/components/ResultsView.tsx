@@ -1,9 +1,8 @@
 "use client";
 
-import type { FileFinding, ScanResult } from "@/lib/api";
+import type { Confidence, FileFinding, ScanResult } from "@/lib/api";
 import {
   groupHistoryFindings,
-  isHighConfidence,
   sortFileFindings,
   splitPath,
   type GroupedHistoryFinding,
@@ -25,6 +24,28 @@ const TONE = {
     rail: "bg-history",
   },
 } as const;
+
+/** Row treatment per confidence tier — the noise control, in one place. */
+const WEIGHT: Record<Confidence, { row: string; path: string; badge: string; value: string }> = {
+  high: {
+    row: "",
+    path: "text-fg",
+    badge: "border-line-strong bg-surface px-2 py-0.5 text-[11px] font-medium text-fg",
+    value: "text-fg-secondary",
+  },
+  medium: {
+    row: "opacity-80 hover:opacity-100",
+    path: "text-fg-secondary",
+    badge: "border-line px-1.5 py-0.5 text-[10px] font-normal text-fg-secondary",
+    value: "text-fg-muted",
+  },
+  low: {
+    row: "opacity-60 hover:opacity-100",
+    path: "text-fg-secondary",
+    badge: "border-line px-1.5 py-0.5 text-[10px] font-normal text-fg-muted",
+    value: "text-fg-muted opacity-70",
+  },
+};
 
 export function ResultsView({ result }: { result: ScanResult }) {
   const { counts } = result;
@@ -90,6 +111,53 @@ function SummaryBar({ result, total }: { result: ScanResult; total: number }) {
         <CountBadge tone="danger" label="exposed" value={result.counts.exposed} />
         <CountBadge tone="history" label="in history" value={result.counts.history} />
         <span className="ml-1 text-xs text-fg-muted">{total} total</span>
+      </div>
+
+      {total > 0 && <ConfidenceBar counts={result.confidence_counts} total={total} />}
+    </div>
+  );
+}
+
+/**
+ * Confidence mix for the whole scan. A repo whose findings are all "low" reads
+ * very differently from one with a single high-confidence hit, and that
+ * distinction is easy to miss when scanning a long list row by row.
+ */
+function ConfidenceBar({
+  counts,
+  total,
+}: {
+  counts: Record<Confidence, number>;
+  total: number;
+}) {
+  const tiers: { level: Confidence; label: string; bar: string }[] = [
+    { level: "high", label: "high confidence", bar: "bg-danger" },
+    { level: "medium", label: "medium", bar: "bg-history" },
+    { level: "low", label: "low", bar: "bg-line-strong" },
+  ];
+
+  return (
+    <div className="w-full border-t border-line pt-3">
+      <div className="flex h-1 w-full overflow-hidden rounded-full bg-line">
+        {tiers.map(({ level, bar }) =>
+          counts[level] > 0 ? (
+            <div
+              key={level}
+              className={`${bar} transition-all duration-500`}
+              style={{ width: `${(counts[level] / total) * 100}%` }}
+            />
+          ) : null,
+        )}
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-fg-muted">
+        {tiers.map(({ level, label, bar }) => (
+          <span key={level} className="inline-flex items-center gap-1.5">
+            <span className={`h-1.5 w-1.5 rounded-full ${counts[level] > 0 ? bar : "bg-line"}`} />
+            <span className="tabular-nums text-fg-secondary">{counts[level]}</span>
+            <span>{label}</span>
+          </span>
+        ))}
       </div>
     </div>
   );
@@ -174,42 +242,51 @@ function Section({
   );
 }
 
-function TypeBadge({ type }: { type: string }) {
-  const strong = isHighConfidence(type);
+function TypeBadge({
+  type,
+  confidence,
+  entropy,
+}: {
+  type: string;
+  confidence: Confidence;
+  entropy?: number;
+}) {
   return (
     <span
-      className={
-        strong
-          ? "inline-flex shrink-0 items-center rounded-md border border-line-strong bg-surface px-2 py-0.5 text-[11px] font-medium text-fg"
-          : "inline-flex shrink-0 items-center rounded-md border border-line px-1.5 py-0.5 text-[10px] font-normal text-fg-muted"
-      }
+      title={`${confidence} confidence`}
+      className={`inline-flex shrink-0 items-center gap-1.5 rounded-md border ${WEIGHT[confidence].badge}`}
     >
       {type}
+      {entropy !== undefined && (
+        <span className="font-mono opacity-70" title="Shannon entropy, bits per character">
+          H={entropy.toFixed(1)}
+        </span>
+      )}
     </span>
   );
 }
 
-function MaskedValue({ value, strong }: { value: string; strong: boolean }) {
+function MaskedValue({
+  value,
+  confidence,
+}: {
+  value: string;
+  confidence: Confidence;
+}) {
   return (
-    <code
-      className={`shrink-0 font-mono text-xs ${
-        strong ? "text-fg-secondary" : "text-fg-muted opacity-70"
-      }`}
-    >
+    <code className={`shrink-0 font-mono text-xs ${WEIGHT[confidence].value}`}>
       {value}
     </code>
   );
 }
 
 function FileFindingRow({ finding, tone }: { finding: FileFinding; tone: Tone }) {
-  const strong = isHighConfidence(finding.type);
+  const weight = WEIGHT[finding.confidence];
   const { dir, name } = splitPath(finding.file);
 
   return (
     <li
-      className={`group relative flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2.5 pl-5 pr-5 transition-colors hover:bg-surface ${
-        strong ? "" : "opacity-65 hover:opacity-100"
-      }`}
+      className={`group relative flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2.5 pl-5 pr-5 transition-colors hover:bg-surface ${weight.row}`}
     >
       {/* Left rail appears on hover — locates the row without adding permanent chrome. */}
       <span
@@ -218,24 +295,26 @@ function FileFindingRow({ finding, tone }: { finding: FileFinding; tone: Tone })
 
       <span className="min-w-0 flex-1 truncate font-mono text-[13px]">
         <span className="text-fg-muted">{dir}</span>
-        <span className={strong ? "text-fg" : "text-fg-secondary"}>{name}</span>
+        <span className={weight.path}>{name}</span>
         <span className="text-fg-muted">:{finding.line}</span>
       </span>
 
-      <TypeBadge type={finding.type} />
-      <MaskedValue value={finding.match} strong={strong} />
+      <TypeBadge
+        type={finding.type}
+        confidence={finding.confidence}
+        entropy={finding.entropy}
+      />
+      <MaskedValue value={finding.match} confidence={finding.confidence} />
     </li>
   );
 }
 
 function HistoryFindingRow({ finding }: { finding: GroupedHistoryFinding }) {
-  const strong = isHighConfidence(finding.type);
+  const weight = WEIGHT[finding.confidence];
 
   return (
     <li
-      className={`group relative flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2.5 pl-5 pr-5 transition-colors hover:bg-surface ${
-        strong ? "" : "opacity-65 hover:opacity-100"
-      }`}
+      className={`group relative flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2.5 pl-5 pr-5 transition-colors hover:bg-surface ${weight.row}`}
     >
       <span
         className={`absolute inset-y-0 left-0 w-0.5 origin-center scale-y-0 opacity-0 transition-all duration-200 group-hover:scale-y-100 group-hover:opacity-100 ${TONE.history.rail}`}
@@ -253,7 +332,7 @@ function HistoryFindingRow({ finding }: { finding: GroupedHistoryFinding }) {
             />
           </svg>
         </span>
-        <code className={`font-mono text-[13px] ${strong ? "text-fg" : "text-fg-secondary"}`}>
+        <code className={`font-mono text-[13px] ${weight.path}`}>
           {finding.commit}
         </code>
         {finding.occurrences > 1 && (
@@ -263,8 +342,12 @@ function HistoryFindingRow({ finding }: { finding: GroupedHistoryFinding }) {
         )}
       </span>
 
-      <TypeBadge type={finding.type} />
-      <MaskedValue value={finding.match} strong={strong} />
+      <TypeBadge
+        type={finding.type}
+        confidence={finding.confidence}
+        entropy={finding.entropy}
+      />
+      <MaskedValue value={finding.match} confidence={finding.confidence} />
     </li>
   );
 }

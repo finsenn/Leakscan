@@ -8,10 +8,12 @@ and always deletes the clone.
 import json
 import os
 import re
+from contextlib import asynccontextmanager
 import shutil
 import stat
 import subprocess
 import tempfile
+import time
 import urllib.error
 import urllib.request
 
@@ -33,7 +35,13 @@ GITHUB_URL_RE = re.compile(
     r"(?P<repo>[A-Za-z0-9._-]{1,100}?)(?:\.git)?/?$"
 )
 
-app = FastAPI(title="Repo Secret Scanner", version="0.1.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    sweep_stale_clones()
+    yield
+
+
+app = FastAPI(title="Repo Secret Scanner", version="0.2.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -130,6 +138,48 @@ def relativize(findings: list, root: str) -> list:
     return out
 
 
+TEMP_PREFIX = "repo-scan-"
+STALE_CLONE_AGE_S = 3600
+
+
+def sweep_stale_clones():
+    """Delete clones orphaned by an earlier process that died mid-scan.
+
+    The finally block in /scan handles the normal path, but it cannot run if
+    the process is killed outright - a crash, a container restart, or Render's
+    free tier idling the service. Without this sweep those clones stay on disk
+    forever. Scoped to our own prefix and to directories at least an hour old,
+    so a scan running in a parallel worker is never touched.
+    """
+    temp_root = tempfile.gettempdir()
+    cutoff = time.time() - STALE_CLONE_AGE_S
+    try:
+        entries = os.listdir(temp_root)
+    except OSError:
+        return
+
+    for entry in entries:
+        if not entry.startswith(TEMP_PREFIX):
+            continue
+        path = os.path.join(temp_root, entry)
+        try:
+            if os.path.isdir(path) and os.path.getmtime(path) < cutoff:
+                rmtree_force(path)
+        except OSError:
+            # Best effort - a locked directory will be retried next startup.
+            pass
+
+
+def confidence_breakdown(findings: list) -> dict:
+    """How many findings landed in each confidence tier, across all groups."""
+    counts = {"high": 0, "medium": 0, "low": 0}
+    for finding in findings:
+        level = finding.get("confidence")
+        if level in counts:
+            counts[level] += 1
+    return counts
+
+
 @app.get("/")
 def health():
     return {"status": "ok", "service": "repo-secret-scanner"}
@@ -161,6 +211,7 @@ def scan(request: ScanRequest):
                 "exposed": len(exposed),
                 "history": len(history),
             },
+            "confidence_counts": confidence_breakdown(exposed + history),
             "history_depth": CLONE_DEPTH,
         }
     finally:

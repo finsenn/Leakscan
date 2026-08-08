@@ -1,19 +1,24 @@
-import type { FileFinding, HistoryFinding } from "./api";
+import type { Confidence, FileFinding, HistoryFinding } from "./api";
 
 /**
- * The engine's "Generic *" patterns (Generic API Key / Password / Secret-Token)
- * match on keyword proximity rather than a provider-specific key shape, so they
- * carry most of the false positives. They stay in the list, but rendered quieter.
+ * Visual weight per confidence tier. The backend decides the tier; the UI only
+ * decides how loudly to say it.
+ *
+ * high   — a provider-specific key shape. Full emphasis.
+ * medium — generic keyword matches and card numbers. Slightly receded.
+ * low    — entropy-only hits. Quietest: a broad net that needs human review.
  */
-export function isHighConfidence(type: string): boolean {
-  return !type.startsWith("Generic ");
+const RANK: Record<Confidence, number> = { high: 3, medium: 2, low: 1 };
+
+export function rankOf(confidence: Confidence): number {
+  return RANK[confidence] ?? 0;
 }
 
-/** High-confidence findings first, then by file path, then line. */
+/** Loudest findings first, then by file path, then line. */
 export function sortFileFindings(findings: FileFinding[]): FileFinding[] {
   return [...findings].sort((a, b) => {
-    const confidence = Number(isHighConfidence(b.type)) - Number(isHighConfidence(a.type));
-    if (confidence !== 0) return confidence;
+    const byConfidence = rankOf(b.confidence) - rankOf(a.confidence);
+    if (byConfidence !== 0) return byConfidence;
     if (a.file !== b.file) return a.file.localeCompare(b.file);
     return a.line - b.line;
   });
@@ -40,7 +45,7 @@ export function groupHistoryFindings(
     }
   }
   return [...groups.values()].sort(
-    (a, b) => Number(isHighConfidence(b.type)) - Number(isHighConfidence(a.type)),
+    (a, b) => rankOf(b.confidence) - rankOf(a.confidence),
   );
 }
 

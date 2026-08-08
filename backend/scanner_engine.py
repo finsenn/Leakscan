@@ -1,77 +1,56 @@
 """Secret-scanning engine.
 
-Detection logic extracted verbatim from the original scan.py CLI so it can be
-imported by the FastAPI backend. No printing, no colors — every function
-returns plain data. The CLI (scan.py at the repo root) and the web backend
-both call into this module.
+Detection runs in two passes:
+
+1. **Regex pass** - known credential formats from patterns.py. High confidence
+   when the shape is provider-specific (`AKIA...`), medium for the generic
+   keyword rules (`password = "..."`).
+2. **Entropy pass** - entropy.py looks at whatever the regex pass did *not*
+   claim and flags strings that are statistically random. Low confidence: it
+   catches custom formats no pattern list covers, at the cost of needing
+   review.
+
+Every finding carries a `confidence` of "high", "medium", or "low" so callers
+can rank or de-emphasize them.
+
+No printing, no colors - the CLI (scan.py) and the FastAPI backend both import
+from here.
 """
 
-import re
 import os
 import subprocess
+
 import pathspec
 
-SECRET_PATTERNS = [
-    # --- Cloud providers ---
-    ("AWS Access Key",          r"AKIA[0-9A-Z]{16}"),
-    ("AWS Secret Key",          r"(?i)aws_secret_access_key\s*[:=]\s*['\"][0-9a-zA-Z/+]{40}['\"]"),
-    ("Google API Key",          r"AIza[0-9A-Za-z_-]{35}"),
-    ("Google OAuth ID",         r"[0-9]+-[0-9A-Za-z_]{32}\.apps\.googleusercontent\.com"),
-    ("Azure Storage Key",       r"(?i)DefaultEndpointsProtocol=https;AccountName=[^;]+;AccountKey=[^;]+"),
-    ("Heroku API Key",          r"(?i)heroku[a-z0-9_ .\-,]*[:=]\s*['\"][0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}['\"]"),
+from entropy import (
+    DEFAULT_CONFIG as DEFAULT_ENTROPY_CONFIG,
+    ENTROPY_FINDING_TYPE,
+    EntropyConfig,
+    find_high_entropy_strings,
+    shannon_entropy,
+)
+from patterns import HIGH, LOW, MEDIUM, SECRET_PATTERNS
 
-    # --- AI / LLM providers ---
-    ("OpenAI API Key",          r"sk-[a-zA-Z0-9]{20,}"),
-    ("OpenAI Project Key",      r"sk-proj-[a-zA-Z0-9_-]{20,}"),
-    ("Anthropic API Key",       r"sk-ant-[a-zA-Z0-9_-]{20,}"),
-    ("Hugging Face Token",      r"hf_[a-zA-Z0-9]{34}"),
-
-    # --- Messaging / bots ---
-    ("Telegram Bot Token",      r"[0-9]{8,10}:[a-zA-Z0-9_-]{35}"),
-    ("Slack Token",             r"xox[baprs]-[0-9a-zA-Z-]{10,}"),
-    ("Slack Webhook",           r"https://hooks\.slack\.com/services/[A-Za-z0-9+/]{40,}"),
-    ("Discord Bot Token",       r"[MNO][a-zA-Z0-9]{23}\.[a-zA-Z0-9_-]{6}\.[a-zA-Z0-9_-]{27}"),
-    ("Discord Webhook",         r"https://discord(?:app)?\.com/api/webhooks/[0-9]+/[a-zA-Z0-9_-]+"),
-    ("Twilio API Key",          r"SK[0-9a-fA-F]{32}"),
-    ("SendGrid API Key",        r"SG\.[a-zA-Z0-9_-]{22}\.[a-zA-Z0-9_-]{43}"),
-    ("Mailgun API Key",         r"key-[0-9a-zA-Z]{32}"),
-
-    # --- Version control / CI ---
-    ("GitHub Token",            r"gh[pousr]_[A-Za-z0-9]{36,}"),
-    ("GitHub Fine-grained PAT", r"github_pat_[A-Za-z0-9_]{80,}"),
-    ("GitLab Token",            r"glpat-[A-Za-z0-9_-]{20}"),
-    ("NPM Token",               r"npm_[A-Za-z0-9]{36}"),
-
-    # --- Payment ---
-    ("Stripe Secret Key",       r"sk_live_[0-9a-zA-Z]{24,}"),
-    ("Stripe Restricted Key",   r"rk_live_[0-9a-zA-Z]{24,}"),
-    ("Stripe Publishable Key",  r"pk_live_[0-9a-zA-Z]{24,}"),
-    ("Square Access Token",     r"sq0atp-[0-9A-Za-z_-]{22}"),
-    ("PayPal Braintree Token",  r"access_token\$production\$[0-9a-z]{16}\$[0-9a-f]{32}"),
-
-    # --- Keys / certs ---
-    ("Private Key",             r"-----BEGIN (RSA |EC |OPENSSH |DSA |PGP )?PRIVATE KEY-----"),
-    ("SSH (ed25519) Private",   r"-----BEGIN OPENSSH PRIVATE KEY-----"),
-    ("PGP Private Key",         r"-----BEGIN PGP PRIVATE KEY BLOCK-----"),
-
-    # --- Databases / connection strings ---
-    ("MongoDB URI",             r"mongodb(\+srv)?://[^\s'\"]+:[^\s'\"]+@[^\s'\"]+"),
-    ("PostgreSQL URI",          r"postgres(?:ql)?://[^\s'\"]+:[^\s'\"]+@[^\s'\"]+"),
-    ("MySQL URI",               r"mysql://[^\s'\"]+:[^\s'\"]+@[^\s'\"]+"),
-    ("Redis URI",               r"redis://[^\s'\"]*:[^\s'\"]+@[^\s'\"]+"),
-
-    # --- Auth / tokens ---
-    ("JWT",                     r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}"),
-    ("Basic Auth in URL",       r"://[A-Za-z0-9._%-]+:[^\s'\"@/]+@"),
-
-    # --- Generic fallbacks (broad - more false positives) ---
-    ("Generic API Key",         r"(?i)(api[_-]?key|apikey)\s*[:=]\s*['\"][0-9a-zA-Z]{16,}['\"]"),
-    ("Generic Password",        r"(?i)(password|passwd|pwd)\s*[:=]\s*['\"][^'\"]{6,}['\"]"),
-    ("Generic Secret/Token",    r"(?i)(secret|token|auth)\s*[:=]\s*['\"][0-9a-zA-Z_\-]{16,}['\"]"),
+__all__ = [
+    "scan_repo", "scan_file", "scan_directory", "scan_git_history",
+    "find_secrets_in_text", "mask", "load_all_gitignores", "is_ignored",
+    "shannon_entropy", "EntropyConfig", "DEFAULT_ENTROPY_CONFIG",
+    "SECRET_PATTERNS", "SKIP_DIRS", "SKIP_EXTENSIONS",
+    "HIGH", "MEDIUM", "LOW",
 ]
 
 SKIP_DIRS = {".git", "venv", "node_modules", "__pycache__", ".venv", "dist", "build", ".idea", ".vscode"}
 SKIP_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".pdf", ".zip", ".exe", ".dll", ".pyc", ".ico", ".mp4", ".woff", ".woff2", ".ttf"}
+
+# Files that are wall-to-wall content hashes and machine-generated ids. The
+# regex pass still runs on them (a real key in a lockfile is worth knowing
+# about); only the entropy pass is suppressed, because it would otherwise
+# report every integrity digest in the file.
+ENTROPY_SKIP_FILENAMES = {
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "composer.lock",
+    "go.sum", "Gemfile.lock", "poetry.lock", "Cargo.lock", "flake.lock",
+}
+ENTROPY_SKIP_SUFFIXES = (".min.js", ".min.css", ".map", ".lock", ".snap")
 
 
 def mask(secret):
@@ -107,29 +86,63 @@ def is_ignored(specs, filepath):
     return False
 
 
-def find_secrets_in_text(text):
-    """Return list of (type, masked) for all secrets in a block of text."""
+def entropy_enabled_for(filename):
+    """False for files that are legitimately full of random-looking strings."""
+    name = os.path.basename(filename)
+    if name in ENTROPY_SKIP_FILENAMES:
+        return False
+    return not name.endswith(ENTROPY_SKIP_SUFFIXES)
+
+
+def find_secrets_in_text(text, entropy_config=None, use_entropy=True):
+    """Return findings for one block of text.
+
+    Each finding is {"type", "match", "confidence"}, with `match` already
+    masked. The regex pass runs first and records the spans it matched; the
+    entropy pass then examines only what is left over.
+    """
+    config = entropy_config or DEFAULT_ENTROPY_CONFIG
     hits = []
-    for name, pattern in SECRET_PATTERNS:
-        for match in re.finditer(pattern, text):
-            hits.append((name, mask(match.group(0))))
+    matched_spans = []
+
+    for pattern in SECRET_PATTERNS:
+        for match in pattern.regex.finditer(text):
+            value = match.group(0)
+            if pattern.validator is not None and not pattern.validator(value):
+                continue
+            matched_spans.append(match.span())
+            hits.append({
+                "type": pattern.name,
+                "match": mask(value),
+                "confidence": pattern.confidence,
+            })
+
+    if use_entropy:
+        for token, _span in find_high_entropy_strings(text, matched_spans, config):
+            hits.append({
+                "type": ENTROPY_FINDING_TYPE,
+                "match": mask(token),
+                "confidence": LOW,
+                "entropy": round(shannon_entropy(token), 2),
+            })
+
     return hits
 
 
-def scan_file(filepath):
+def scan_file(filepath, entropy_config=None):
     findings = []
+    use_entropy = entropy_enabled_for(filepath)
     try:
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             for line_num, line in enumerate(f, start=1):
-                for name, masked in find_secrets_in_text(line):
-                    findings.append({"file": filepath, "line": line_num,
-                                     "type": name, "match": masked})
+                for hit in find_secrets_in_text(line, entropy_config, use_entropy):
+                    findings.append({"file": filepath, "line": line_num, **hit})
     except Exception:
         pass
     return findings
 
 
-def scan_directory(target, specs):
+def scan_directory(target, specs, entropy_config=None):
     findings = []
     for root, dirs, files in os.walk(target):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
@@ -138,7 +151,7 @@ def scan_directory(target, specs):
             if ext in SKIP_EXTENSIONS:
                 continue
             path = os.path.join(root, filename)
-            file_findings = scan_file(path)
+            file_findings = scan_file(path, entropy_config)
             ignored = is_ignored(specs, path)
             for f in file_findings:
                 f["ignored"] = ignored
@@ -146,7 +159,7 @@ def scan_directory(target, specs):
     return findings
 
 
-def scan_git_history(target, on_warning=None):
+def scan_git_history(target, on_warning=None, entropy_config=None):
     """Scan the diffs of all past commits for secrets that may have been
     committed and later removed - they still live in git history.
 
@@ -174,8 +187,8 @@ def scan_git_history(target, on_warning=None):
             for line in diff.splitlines():
                 # Only look at ADDED lines (start with + but not +++ header)
                 if line.startswith("+") and not line.startswith("+++"):
-                    for name, masked in find_secrets_in_text(line):
-                        findings.append({"commit": commit[:8], "type": name, "match": masked})
+                    for hit in find_secrets_in_text(line, entropy_config):
+                        findings.append({"commit": commit[:8], **hit})
     except Exception as e:
         if on_warning is not None:
             on_warning(e)
@@ -184,14 +197,14 @@ def scan_git_history(target, on_warning=None):
     return findings
 
 
-def scan_repo(target, on_warning=None):
+def scan_repo(target, on_warning=None, entropy_config=None):
     """Scan a folder (or single file) and return all findings grouped.
 
     Returns a dict:
       {
-        "exposed":    [{"file", "line", "type", "match"}, ...],
-        "gitignored": [{"file", "line", "type", "match"}, ...],
-        "history":    [{"commit", "type", "match"}, ...] or None if not a git repo,
+        "exposed":    [{"file", "line", "type", "match", "confidence"}, ...],
+        "gitignored": [{"file", "line", "type", "match", "confidence"}, ...],
+        "history":    [{"commit", "type", "match", "confidence"}, ...] or None,
       }
     Raises FileNotFoundError if target does not exist.
     """
@@ -201,14 +214,15 @@ def scan_repo(target, on_warning=None):
     specs = load_all_gitignores(target)
 
     if os.path.isfile(target):
-        all_findings = scan_file(target)
+        all_findings = scan_file(target, entropy_config)
         for f in all_findings:
             f["ignored"] = False
     else:
-        all_findings = scan_directory(target, specs)
+        all_findings = scan_directory(target, specs, entropy_config)
 
     return {
         "exposed":    [f for f in all_findings if not f.get("ignored")],
         "gitignored": [f for f in all_findings if f.get("ignored")],
-        "history":    scan_git_history(target, on_warning=on_warning),
+        "history":    scan_git_history(target, on_warning=on_warning,
+                                       entropy_config=entropy_config),
     }
