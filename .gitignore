@@ -12,3 +12,6 @@ node_modules/
 claude.md
 CLAUDE.md
 scan.py
+
+# Local tool config (absolute paths, machine-specific)
+.claude/settings.local.json
