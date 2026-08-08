@@ -47,7 +47,7 @@ low-confidence should *look* different at a glance from one with a real leak.
 ![Dark mode](docs/images/2.png)
 
 <!-- SCREENSHOT: the hero + empty state before scanning (input box prominent). -->
-![Empty state](3.png)
+![Empty state](docs/images/3.png)
 
 <!-- SCREENSHOT: the loading state mid-scan, with the staged progress list. -->
 ![Scanning state](docs/images/4.png)
