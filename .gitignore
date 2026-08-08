@@ -8,4 +8,7 @@ node_modules/
 .next/
 
 
+# Local-only, kept out of the public repo
 claude.md
+CLAUDE.md
+scan.py

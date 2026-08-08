@@ -9,7 +9,6 @@ README. Sizes are suggestions, not requirements.
 | `results-dark.png` | Results view, dark mode | Matching the light shot's scroll position makes the pair read well. |
 | `empty-state.png` | Hero + input before scanning | Shows the landing experience. |
 | `scanning-state.png` | Mid-scan loading state | Capture while the staged progress list is visible. |
-| `cli-output.png` | `python scan.py .` in a terminal | Optional. Shows the shared engine driving a second frontend. |
 | `confidence-bar.png` | Close-up of the high/medium/low summary bar | Optional. |
 | `api-docs.png` | FastAPI `/docs` with POST /scan expanded | Optional. |
 

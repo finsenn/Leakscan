@@ -59,25 +59,22 @@ later deleted, which remain recoverable from past commits.
 > There is deliberately no "protected by .gitignore" category in the web app.
 > A clone contains only *tracked* files, and adding a path to `.gitignore` never
 > untracks a file that was already committed — so anything the scan finds in a
-> public clone is public, full stop. The CLI keeps that distinction, because
-> there it is checking a local working copy before a push, where it is real.
-
-<!-- SCREENSHOT (optional): the CLI (`python scan.py .`) with colored output —
-     shows the same engine serving a second frontend. -->
-![CLI output](docs/images/cli-output.png)
+> public clone is public, full stop. The engine still computes the distinction,
+> because it is real when checking a local working copy before a push — the web
+> app simply does not surface something that cannot apply to a public repo.
 
 ---
 
 ## Architecture
 
-Two deployable apps sharing one detection engine. The engine is pure Python
-with no web dependencies, which is what lets the CLI and the API both consume
-it without duplicating logic.
+Two deployable apps over one detection engine. The engine is pure Python with
+no web dependencies — it returns plain data and never prints — so the HTTP
+layer stays a thin wrapper and the detection logic can be tested without
+starting a server.
 
 ```mermaid
 flowchart TD
     UI["Next.js UI<br/><i>Vercel</i>"] -->|POST /scan| API["FastAPI<br/><i>Render</i>"]
-    CLI["scan.py CLI<br/><i>local pre-push check</i>"] --> ENGINE
 
     API --> V{"Validate URL<br/>github.com only"}
     V -->|invalid| E400["400"]
@@ -105,7 +102,7 @@ flowchart TD
 | [`backend/scanner_engine.py`](backend/scanner_engine.py) | Orchestration: files, gitignore, git history |
 | [`backend/main.py`](backend/main.py) | HTTP layer: validation, cloning, cleanup |
 | [`frontend/src/lib/findings.ts`](frontend/src/lib/findings.ts) | Confidence ranking, history de-duplication |
-| [`scan.py`](scan.py) | CLI frontend over the same engine |
+| [`backend/tests/`](backend/tests) | Detection test suite |
 
 ---
 
@@ -284,12 +281,6 @@ Frontend — http://localhost:3000:
 cd frontend && npm install && npm run dev
 ```
 
-CLI, against any local folder:
-
-```bash
-python scan.py path/to/repo
-```
-
 With `ALLOWED_ORIGINS` unset the API accepts any localhost port, so the
 frontend works regardless of which port `next dev` picks.
 
@@ -332,9 +323,9 @@ internet. Pass a comma-separated list to also allow preview deployments.
 A few decisions that were less obvious than they look:
 
 **The engine has no web dependencies.** `scanner_engine.py` returns plain data
-and never prints. That is what allows the CLI and the API to share one
-implementation — and it means detection can be tested without spinning up a
-server, which is why the test suite runs in 0.2 seconds.
+and never prints, so presentation lives entirely in the layer above it. That
+keeps the HTTP handler thin and lets detection be tested without spinning up a
+server — which is why 63 tests run in 0.2 seconds.
 
 **Regex spans feed the entropy pass.** The regex pass records the character
 ranges it matched, and entropy examines only what is left. Without this, every
