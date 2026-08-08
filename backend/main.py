@@ -146,14 +146,19 @@ def scan(request: ScanRequest):
         clone_repo(owner, repo, clone_dir)
         results = scan_repo(clone_dir)
         history = results["history"] if results["history"] is not None else []
+        # The engine splits file findings by .gitignore status, which is a
+        # pre-push check for local working copies. It doesn't apply here: a
+        # clone contains only tracked files, and an ignore rule never untracks
+        # something already committed. Anything the scan found in the clone is
+        # public, so both groups report as exposed. (The CLI keeps the split.)
+        exposed = relativize(results["exposed"] + results["gitignored"], clone_dir)
+
         return {
             "repo": f"{owner}/{repo}",
-            "exposed": relativize(results["exposed"], clone_dir),
-            "gitignored": relativize(results["gitignored"], clone_dir),
+            "exposed": exposed,
             "history": history,
             "counts": {
-                "exposed": len(results["exposed"]),
-                "gitignored": len(results["gitignored"]),
+                "exposed": len(exposed),
                 "history": len(history),
             },
             "history_depth": CLONE_DEPTH,

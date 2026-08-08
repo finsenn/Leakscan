@@ -14,9 +14,8 @@ export type HistoryFinding = {
 export type ScanResult = {
   repo: string;
   exposed: FileFinding[];
-  gitignored: FileFinding[];
   history: HistoryFinding[];
-  counts: { exposed: number; gitignored: number; history: number };
+  counts: { exposed: number; history: number };
   history_depth: number;
 };
 

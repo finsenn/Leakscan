@@ -9,7 +9,7 @@ import {
   type GroupedHistoryFinding,
 } from "@/lib/findings";
 
-type Tone = "danger" | "safe" | "history";
+type Tone = "danger" | "history";
 
 const TONE = {
   danger: {
@@ -17,12 +17,6 @@ const TONE = {
     text: "text-danger",
     badge: "border-danger-border bg-danger-soft text-danger",
     rail: "bg-danger",
-  },
-  safe: {
-    dot: "bg-safe",
-    text: "text-safe",
-    badge: "border-safe-border bg-safe-soft text-safe",
-    rail: "bg-safe",
   },
   history: {
     dot: "bg-history",
@@ -34,9 +28,8 @@ const TONE = {
 
 export function ResultsView({ result }: { result: ScanResult }) {
   const { counts } = result;
-  const total = counts.exposed + counts.gitignored + counts.history;
+  const total = counts.exposed + counts.history;
   const exposed = sortFileFindings(result.exposed);
-  const gitignored = sortFileFindings(result.gitignored);
   const history = groupHistoryFindings(result.history);
 
   return (
@@ -60,23 +53,11 @@ export function ResultsView({ result }: { result: ScanResult }) {
           </Section>
 
           <Section
-            tone="safe"
-            title="Protected by .gitignore"
-            description="Present locally but excluded from version control. Still worth auditing."
-            count={counts.gitignored}
-            index={1}
-          >
-            {gitignored.map((finding, i) => (
-              <FileFindingRow key={rowKey(finding, i)} finding={finding} tone="safe" />
-            ))}
-          </Section>
-
-          <Section
             tone="history"
             title="In git history"
             description={`Removed from the working tree but still recoverable from past commits (last ${result.history_depth} commits scanned).`}
             count={counts.history}
-            index={2}
+            index={1}
           >
             {history.map((finding, i) => (
               <HistoryFindingRow
@@ -107,7 +88,6 @@ function SummaryBar({ result, total }: { result: ScanResult; total: number }) {
 
       <div className="flex flex-wrap items-center gap-2">
         <CountBadge tone="danger" label="exposed" value={result.counts.exposed} />
-        <CountBadge tone="safe" label="gitignored" value={result.counts.gitignored} />
         <CountBadge tone="history" label="in history" value={result.counts.history} />
         <span className="ml-1 text-xs text-fg-muted">{total} total</span>
       </div>
@@ -306,7 +286,7 @@ function CleanState({ repo }: { repo: string }) {
       <p className="mt-4 text-[15px] font-medium text-fg">No secrets found</p>
       <p className="mx-auto mt-1.5 max-w-md text-sm leading-relaxed text-fg-secondary">
         <span className="font-mono text-[13px]">{repo}</span> came back clean across
-        tracked files, ignored files, and scanned commit history.
+        its committed files and scanned commit history.
       </p>
     </div>
   );
